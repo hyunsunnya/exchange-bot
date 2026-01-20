@@ -3,17 +3,12 @@ from bs4 import BeautifulSoup
 import os
 import warnings
 
-# SSL 경고 무시
 warnings.filterwarnings("ignore")
 
-# --- GitHub Secrets 설정 ---
 TOKEN = os.environ.get('TELEGRAM_TOKEN')
 CHAT_ID = os.environ.get('CHAT_ID')
 
-KEYWORDS = ["콘서트", "페스티벌", "내한", "전시", "오픈", "티켓", "공연", "뮤지컬"]
-
 def send_telegram_message(text):
-    """텔레그램 메시지 전송 함수"""
     url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
     payload = {
         "chat_id": CHAT_ID,
@@ -23,112 +18,70 @@ def send_telegram_message(text):
     }
     try:
         res = requests.post(url, json=payload, timeout=10)
-        res_data = res.json()
-        if not res_data.get("ok"):
-            print(f"❌ 텔레그램 서버 응답 에러: {res_data.get('description')}")
-        return res_data
+        return res.json()
     except Exception as e:
         print(f"❌ 전송 에러: {e}")
         return None
 
-def get_google_news():
-    """구글 뉴스에서 티켓 정보 수집"""
-    url = "https://news.google.com/rss/search?q=티켓+오픈+콘서트+페스티벌+뮤지컬&hl=ko&gl=KR&ceid=KR:ko"
-    events = []
+def get_combined_news():
+    """구글 뉴스를 활용해 일반 뉴스 + NOL티켓 내부 소식을 모두 수집"""
+    # 쿼리 설명: 
+    # 1. (티켓 오픈 콘서트 뮤지컬) -> 일반 뉴스 검색
+    # 2. site:nolticket.com -> NOL티켓 사이트 내부의 신규 페이지 검색
+    queries = [
+        "티켓 오픈 콘서트 뮤지컬 페스티벌",
+        "site:nolticket.com" 
+    ]
+    
+    all_events = []
     seen_titles = []
-    try:
-        headers = {'User-Agent': 'Mozilla/5.0'}
-        response = requests.get(url, headers=headers, timeout=10)
-        soup = BeautifulSoup(response.content, 'html.parser') 
-        items = soup.find_all('item')
-        
-        for item in items:
-            title = item.title.text if item.title else ""
-            link = item.find('link').next_element.strip() if item.find('link') else ""
-            
-            if any(kw in title for kw in KEYWORDS):
+
+    headers = {'User-Agent': 'Mozilla/5.0'}
+
+    for q in queries:
+        url = f"https://news.google.com/rss/search?q={q}&hl=ko&gl=KR&ceid=KR:ko"
+        try:
+            response = requests.get(url, headers=headers, timeout=10)
+            soup = BeautifulSoup(response.content, 'html.parser')
+            items = soup.find_all('item')
+
+            print(f"🔍 쿼리 [{q}] 검색 중... {len(items)}건 발견")
+
+            count = 0
+            for item in items:
+                title = item.title.text if item.title else ""
+                link = item.find('link').next_element.strip() if item.find('link') else ""
+                
+                # 중복 방지 로직
                 clean_title = title.split(' - ')[0]
                 short_title = clean_title[:10].replace(" ", "")
+                
                 if not any(short_title in seen or seen in short_title for seen in seen_titles):
-                    events.append(f"📰 **[뉴스] {clean_title}**\n🔗 [뉴스보기]({link})")
+                    # 출처 표시
+                    prefix = "🎫 [NOL티켓]" if "nolticket.com" in link else "📰 [뉴스]"
+                    all_events.append(f"{prefix} **{clean_title}**\n🔗 [자세히 보기]({link})")
                     seen_titles.append(short_title)
-            if len(events) >= 5: break
-        return events
-    except Exception as e:
-        print(f"❌ 구글 뉴스 수집 실패: {e}")
-        return []
-
-def get_nol_tickets():
-    """NOL티켓 API에서 콘서트 및 뮤지컬 정보 수집 (보강 버전)"""
-    categories = ["CONCERT", "MUSICAL"]
-    events = []
-    
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
-        'Referer': 'https://nolticket.com/',
-        'Origin': 'https://nolticket.com'
-    }
-
-    for cat in categories:
-        try:
-            # status=OPEN 필터를 제거하여 모든 상태의 상품을 확인
-            url = f"https://api.nolticket.com/v1/product/list?category={cat}&page=0&size=10"
-            print(f"🔍 NOL {cat} 데이터 요청 중...")
-            
-            response = requests.get(url, headers=headers, timeout=10)
-            
-            if response.status_code == 200:
-                data = response.json()
-                products = data.get('content', [])
-                print(f"✅ NOL {cat} 수집 성공: {len(products)}건 발견")
-                
-                cat_name = "콘서트" if cat == "CONCERT" else "뮤지컬"
-                
-                count = 0
-                for item in products:
-                    name = item.get('name')
-                    pid = item.get('id')
-                    place = item.get('placeName', '장소미정')
-                    sale_date = item.get('saleStartDate', '')
-                    
-                    link = f"https://nolticket.com/product/detail/{pid}"
-                    
-                    info_text = f"🎫 **[{cat_name}] {name}**\n📍 {place}"
-                    if sale_date:
-                        clean_date = sale_date.replace('T', ' ')[:16]
-                        info_text += f"\n⏰ 오픈: {clean_date}"
-                    
-                    info_text += f"\n🔗 [예매하러가기]({link})"
-                    events.append(info_text)
-                    
                     count += 1
-                    if count >= 3: break # 카테고리당 3개씩만
-            else:
-                print(f"❌ NOL {cat} 응답 에러: {response.status_code}")
                 
+                if count >= 5: break # 각 쿼리당 최대 5개
         except Exception as e:
-            print(f"❌ NOL {cat} 수집 중 에러: {e}")
-            
-    return events
+            print(f"❌ 검색 에러 [{q}]: {e}")
+
+    return all_events
 
 if __name__ == "__main__":
     if not TOKEN or not CHAT_ID:
-        print("❌ 설정 에러: GitHub Secrets(TOKEN, CHAT_ID)를 확인하세요.")
+        print("❌ 설정 에러: GitHub Secrets를 확인하세요.")
     else:
-        print("🚀 통합 수집 시작 (Google News + NOL Ticket)")
+        print("🚀 통합 소식 수집 시작...")
+        results = get_combined_news()
         
-        news_list = get_google_news()
-        nol_list = get_nol_tickets()
-        
-        all_messages = news_list + nol_list
-        
-        if all_messages:
-            final_msg = "📅 **오늘의 티켓 오픈 및 공연 소식**\n"
-            final_msg += "━━━━━━━━━━━━━━━\n\n"
-            final_msg += "\n\n".join(all_messages)
+        if results:
+            msg = "📅 **오늘의 통합 티켓 소식**\n"
+            msg += "━━━━━━━━━━━━━━━\n\n"
+            msg += "\n\n".join(results)
             
-            result = send_telegram_message(final_msg)
-            if result and result.get("ok"):
-                print(f"✅ 최종 {len(all_messages)}건 전송 완료!")
+            send_telegram_message(msg)
+            print(f"✅ 총 {len(results)}건 전송 완료!")
         else:
-            print("✅ 수집된 새로운 소식이 없습니다.")
+            print("✅ 새로운 소식이 없습니다.")
