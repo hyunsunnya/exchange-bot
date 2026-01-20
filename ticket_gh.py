@@ -1,4 +1,5 @@
 import requests
+from bs4 import BeautifulSoup
 import os
 import warnings
 
@@ -22,67 +23,65 @@ def send_telegram_message(text):
         print(f"❌ 전송 에러: {e}")
         return None
 
-def get_interpark_ranking():
-    """인터파크 티켓의 실시간 랭킹 데이터를 직접 수집 (더 정확함)"""
-    # 콘서트(01003) 및 뮤지컬(01011) 장르 랭킹 API
-    genres = {"콘서트": "01003", "뮤지컬": "01011"}
-    events = []
+def get_interpark_announcements():
+    """인터파크 티켓 오픈 공지만 정확하게 수집"""
+    # 쿼리: 인터파크 사이트 내에서 '티켓 오픈 공지'라는 단어가 포함된 최신 결과
+    query = "site:ticket.interpark.com/Ticket/Goods/TPGoodsGate.asp \"티켓오픈공지\""
+    url = f"https://news.google.com/rss/search?q={query}&hl=ko&gl=KR&ceid=KR:ko"
     
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36'
-    }
+    events = []
+    headers = {'User-Agent': 'Mozilla/5.0'}
 
-    for name, code in genres.items():
-        try:
-            # 인터파크 랭킹 데이터 경로
-            url = f"http://ticket.interpark.com/api/ranking/genre?genreCode={code}"
-            response = requests.get(url, headers=headers, timeout=10)
+    try:
+        response = requests.get(url, headers=headers, timeout=10)
+        soup = BeautifulSoup(response.content, 'html.parser')
+        items = soup.find_all('item')
+
+        print(f"🔍 인터파크 공지 검색 중... {len(items)}건 발견")
+
+        for item in items[:5]: # 최신 공지 5개
+            title = item.title.text
+            # 제목에서 불필요한 부분 정리
+            clean_title = title.replace(" - 인터파크", "").replace("티켓오픈공지", "").strip()
+            link = item.find('link').next_element.strip()
             
-            if response.status_code == 200:
-                data = response.json()
-                # 랭킹 상위 3개씩만 추출
-                items = data.get('data', [])[:3]
-                for item in items:
-                    title = item.get('productName')
-                    place = item.get('placeName')
-                    p_code = item.get('productCode')
-                    # 놀 인터파크 상세 페이지 주소로 조합
-                    link = f"https://nol.interpark.com/product/detail/{p_code}"
-                    
-                    events.append(f"🎫 **[{name}] {title}**\n📍 {place}\n🔗 [예매하러가기]({link})")
-            print(f"✅ 인터파크 {name} 수집 완료")
-        except Exception as e:
-            print(f"❌ 인터파크 {name} 수집 중 에러: {e}")
+            # 실제 '놀 인터파크'로 연결되도록 링크 형태 살짝 변경 (선택 사항)
+            # 기본 링크 그대로 사용해도 인터파크 페이지로 연결됩니다.
+            events.append(f"📣 **[인터파크 공지]**\n{clean_title}\n🔗 [공지확인]({link})")
             
+    except Exception as e:
+        print(f"❌ 인터파크 수집 에러: {e}")
+    
     return events
 
 if __name__ == "__main__":
     if not TOKEN or not CHAT_ID:
         print("❌ 설정 에러: GitHub Secrets를 확인하세요.")
     else:
-        print("🚀 인터파크 데이터 직결 수집 시작...")
+        print("🚀 인터파크 공지사항 추적 시작...")
         
-        # 1. 인터파크 랭킹 정보 (매우 정확)
-        interpark_list = get_interpark_ranking()
+        # 인터파크 공지사항 가져오기
+        interpark_announcements = get_interpark_announcements()
         
-        # 2. 만약을 위해 일반 뉴스도 2개만 섞기
+        # 검색 결과가 너무 적을 경우를 대비해 일반 뉴스도 보강
         news_list = []
         try:
-            news_url = "https://news.google.com/rss/search?q=티켓+오픈+콘서트+뮤지컬&hl=ko&gl=KR&ceid=KR:ko"
+            news_query = "티켓 오픈 콘서트 뮤지컬"
+            news_url = f"https://news.google.com/rss/search?q={news_query}&hl=ko&gl=KR&ceid=KR:ko"
             res = requests.get(news_url, timeout=10)
             soup = BeautifulSoup(res.content, 'html.parser')
-            for item in soup.find_all('item')[:2]:
+            for item in soup.find_all('item')[:3]:
                 news_list.append(f"📰 **[뉴스] {item.title.text.split(' - ')[0]}**\n🔗 [뉴스보기]({item.find('link').next_element.strip()})")
         except: pass
 
-        all_messages = interpark_list + news_list
+        all_messages = interpark_announcements + news_list
         
         if all_messages:
-            final_msg = "📅 **오늘의 인기 티켓 & 오픈 정보**\n"
+            final_msg = "📅 **오늘의 티켓 오픈 정보**\n"
             final_msg += "━━━━━━━━━━━━━━━\n\n"
             final_msg += "\n\n".join(all_messages)
             
             send_telegram_message(final_msg)
-            print(f"✅ 총 {len(all_messages)}건 전송 완료!")
+            print(f"✅ 총 {len(all_messages)}건 전송 성공!")
         else:
-            print("✅ 새로운 소식이 없습니다.")
+            print("✅ 수집된 정보가 없습니다.")
