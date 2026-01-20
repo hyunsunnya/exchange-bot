@@ -2,13 +2,14 @@ import requests
 from bs4 import BeautifulSoup
 import os
 
-# --- 설정 구간 ---
+# --- GitHub Secrets에서 설정값 불러오기 ---
 TOKEN = os.environ.get('TELEGRAM_TOKEN')
-CHAT_ID = '-1003615231060' 
+CHAT_ID = os.environ.get('CHAT_ID')
 
 KEYWORDS = ["콘서트", "페스티벌", "내한", "전시", "오픈", "티켓", "공연"]
 
 def send_telegram_message(text):
+    """텔레그램 메시지 전송 함수"""
     url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
     payload = {
         "chat_id": CHAT_ID,
@@ -18,12 +19,16 @@ def send_telegram_message(text):
     }
     try:
         res = requests.post(url, json=payload, timeout=10)
-        return res.json()
+        res_data = res.json()
+        if not res_data.get("ok"):
+            print(f"❌ 텔레그램 에러: {res_data.get('description')}")
+        return res_data
     except Exception as e:
-        print(f"❌ 전송 에러: {e}")
+        print(f"❌ 전송 중 네트워크 에러: {e}")
         return None
 
 def get_ticket_info():
+    """구글 뉴스 RSS에서 중복 없이 티켓 정보 수집"""
     url = "https://news.google.com/rss/search?q=티켓+오픈+콘서트+페스티벌+전시&hl=ko&gl=KR&ceid=KR:ko"
     
     try:
@@ -33,39 +38,40 @@ def get_ticket_info():
         items = soup.find_all('item')
         
         found_events = []
-        seen_titles = [] # 이미 처리한 기사 키워드를 저장
+        seen_titles = [] # 중복 방지용 리스트
 
         for item in items:
             title = item.title.text if item.title else ""
+            
+            # 링크 추출 (테스트 성공한 로직)
             link = ""
             if item.find('link'):
                 link = item.find('link').next_element.strip()
             
-            # 1. 키워드 포함 여부 확인
+            # 1. 키워드 필터링
             if any(kw in title for kw in KEYWORDS):
-                clean_title = title.split(' - ')[0] # 언론사명 제거
+                clean_title = title.split(' - ')[0] # 언론사 이름 제거
                 
-                # 2. 중복 방지 로직: 제목의 앞 10글자가 이미 저장된 제목들과 겹치는지 확인
-                # (보통 같은 행사 기사는 제목 앞부분이 비슷합니다)
+                # 2. 중복 소식 방지 (제목 앞 10자 비교)
                 short_title = clean_title[:10].replace(" ", "")
                 if any(short_title in seen or seen in short_title for seen in seen_titles):
-                    continue # 비슷한 제목이 이미 있다면 건너뜀
+                    continue
                 
                 found_events.append(f"🎫 **{clean_title}**\n🔗 [자세히 보기]({link})")
-                seen_titles.append(short_title) # 새로운 제목 키워드 등록
+                seen_titles.append(short_title)
             
-            if len(found_events) >= 5:
+            if len(found_events) >= 5: # 하루 최대 5개 소식
                 break
         return found_events
     except Exception as e:
-        print(f"❌ 데이터 수집 에러: {e}")
+        print(f"❌ 수집 에러: {e}")
         return []
 
 if __name__ == "__main__":
-    if not TOKEN:
-        print("❌ 에러: TELEGRAM_TOKEN이 설정되지 않았습니다.")
+    if not TOKEN or not CHAT_ID:
+        print("❌ 설정 에러: GitHub Secrets에서 TOKEN 또는 CHAT_ID를 찾을 수 없습니다.")
     else:
-        print(f"🔍 중복 제거 필터 적용 중... (수신처: {CHAT_ID})")
+        print(f"🔍 티켓 정보 수집 및 전송 시작... (수신처: {CHAT_ID})")
         events = get_ticket_info()
         
         if events:
@@ -73,7 +79,8 @@ if __name__ == "__main__":
             msg += "━━━━━━━━━━━━━━━\n\n"
             msg += "\n\n".join(events)
             
-            send_telegram_message(msg)
-            print(f"✅ 중복 제외 {len(events)}건 전송 완료!")
+            result = send_telegram_message(msg)
+            if result and result.get("ok"):
+                print(f"✅ 전송 성공! ({len(events)}건)")
         else:
             print("✅ 새로운 소식이 없습니다.")
