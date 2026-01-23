@@ -21,7 +21,7 @@ else:
     REGION_NAME = "서울시 마포구"; NX, NY = 59, 127
 
 # 실행 시간 제한 (07:00 ~ 07:30 사이만 실행)
-if not (now.hour == 7 and 0 <= now.minute <= 30):
+if not (now.hour == 13 and 50 <= now.minute <= 30):
     print(f"현재 {now.strftime('%H:%M')} - 알림 시간이 아닙니다.")
     sys.exit()
 
