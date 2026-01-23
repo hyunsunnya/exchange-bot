@@ -25,7 +25,7 @@ jobs:
         run: |
           # 1. 라이브러리 설치 (사용자님 요청에 따라 python -m pip install 사용)
           python -m pip install --upgrade pip
-          python -m pip install requests beautifulsoup4 python-telegram-bot yfinance
+          python -m pip install requests beautifulsoup4 python-telegram-bot yfinance pandas-market-calendars pandas
           
           # 2. 설치 확인 후 즉시 실행 (경로 꼬임 방지)
           echo "--- Installed Packages ---"
