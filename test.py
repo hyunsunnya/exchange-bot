@@ -1,5 +1,4 @@
 import requests
-from bs4 import BeautifulSoup
 import asyncio
 import os
 import datetime
@@ -10,52 +9,41 @@ TOKEN = os.environ.get('TELEGRAM_TOKEN')
 CHAT_ID = os.environ.get('CHAT_ID')
 now = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=9)))
 
-# 주말/공휴일 체크 (테스트 완료 후 필요시 활성화)
+# 주말/공휴일 체크
 if now.weekday() >= 5:
     sys.exit()
 
 async def get_exchange_data():
-    # 상세 페이지 대신 시장지수 메인 페이지 사용 (더 안정적임)
-    url = "https://finance.naver.com/marketindex/"
+    # 네이버 내부 API 주소 (가장 정확하고 빠름)
+    url = "https://quotation-api-cdn.dunamu.com/v1/forex/recent?codes=FRX.KRWUSD,FRX.KRWJPY"
     headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36'
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     }
     
     try:
         response = requests.get(url, headers=headers, timeout=10)
-        soup = BeautifulSoup(response.content.decode('euc-kr', 'replace'), 'html.parser')
+        data = response.json()
         
         results = {}
-        # 주요 통화 리스트 추출
-        exchange_list = soup.select(".exchange_list > li")
-        
-        for item in exchange_list:
-            title = item.select_one(".h_lst").text.strip()
-            # 달러와 엔화만 골라내기
-            if "미국 USD" in title or "일본 JPY" in title:
-                key = "USD" if "미국" in title else "JPY"
-                value = float(item.select_one(".value").text.replace(",", ""))
-                change = float(item.select_one(".change").text.replace(",", ""))
+        for item in data:
+            # USD, JPY 구분
+            code = item['currencyCode']
+            
+            # 전일 대비 등락 정보 (RISE: 상승, FALL: 하락, EVEN: 보합)
+            change_type = item['change']
+            change_amt = item['changePrice']
+            if change_type == "FALL":
+                change_amt = -change_amt
                 
-                # 상승/하락 판정
-                blind_text = item.select_one(".blind").text
-                if "하락" in blind_text:
-                    change = -change
-                
-                # 등락률 계산 (메인 페이지엔 비율이 없으므로 직접 계산)
-                # 전일가 = 현재가 - 변동분
-                prev_val = value - change
-                rate = (change / prev_val) * 100
-                
-                results[key] = {
-                    'current': value,
-                    'change_amt': change,
-                    'change_rate': rate
-                }
+            results[code] = {
+                'current': item['basePrice'],
+                'change_amt': change_amt,
+                'change_rate': item['changeRate'] * 100 if change_type == "RISE" else -item['changeRate'] * 100 if change_type == "FALL" else 0.0
+            }
         return results
     
     except Exception as e:
-        print(f"❌ 데이터 수집 중 에러 발생: {e}")
+        print(f"❌ API 호출 에러: {e}")
         return None
 
 async def main():
@@ -71,22 +59,21 @@ async def main():
         return
 
     msg_items = []
-    # 달러 정보 정리
+    # 달러(USD) 정리
     if "USD" in data:
         usd = data["USD"]
-        mark = "🔺" if usd['change_rate'] > 0 else "🔻"
-        if usd['change_rate'] == 0: mark = "━"
+        mark = "🔺" if usd['change_amt'] > 0 else "🔻" if usd['change_amt'] < 0 else "━"
         msg_items.append(
             f"💵 **미국 달러(USD)**\n"
             f"  • 현재가: `{usd['current']:,.2f}원`\n"
             f"  • 전일비: {mark} `{usd['change_amt']:+.2f}원` ({usd['change_rate']:+.2f}%)"
         )
 
-    # 엔화 정보 정리
+    # 엔화(JPY) 정리
     if "JPY" in data:
         jpy = data["JPY"]
-        mark = "🔺" if jpy['change_rate'] > 0 else "🔻"
-        if jpy['change_rate'] == 0: mark = "━"
+        # 네이버 API는 100엔 기준이므로 basePrice가 이미 100엔당 가격임
+        mark = "🔺" if jpy['change_amt'] > 0 else "🔻" if jpy['change_amt'] < 0 else "━"
         msg_items.append(
             f"💴 **일본 엔화(JPY/100)**\n"
             f"  • 현재가: `{jpy['current']:,.2f}원`\n"
