@@ -22,9 +22,6 @@ korea_holidays = ["2026-01-01", "2026-02-16", "2026-02-17", "2026-02-18", "2026-
 if now.strftime('%Y-%m-%d') in korea_holidays:
     sys.exit()
 
-# 3. 실행 시간 제한 (테스트 시 주석 처리)
-if not (now.hour == 10 and 0 <= now.minute <= 30):
-    sys.exit()
 
 async def get_naver_exchange_rate(code):
     url = f"https://finance.naver.com/marketindex/exchangeDetail.naver?marketindexCd={code}"
