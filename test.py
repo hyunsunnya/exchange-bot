@@ -48,9 +48,6 @@ if today_str in korea_holidays:
 # =========================
 # 3. 실행 시간 제한
 # =========================
-if not (now.hour == 10 and 0 <= now.minute <= 30):
-    print(f"{now.strftime('%H:%M')} - 실행 시간이 아님")
-    sys.exit()
 
 # =========================
 # 환율 조회 함수 (전일비 정확 버전)
