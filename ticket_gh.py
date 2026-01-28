@@ -1,11 +1,12 @@
 import os
 import warnings
 import requests
+import time
 from bs4 import BeautifulSoup
-from urllib.parse import quote, urllibparse
+from urllib.parse import quote
 from datetime import datetime
 
-# SSL 및 경고 무시
+# SSL 경고 및 일반 경고 무시
 warnings.filterwarnings("ignore")
 import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -15,22 +16,27 @@ TOKEN = "7874043423:AAEtpCMnZpG9lOzMHfwd1LxumLiAB-_oNAw"
 CHAT_ID = "-1003615231060"
 
 def send_telegram_message(text: str):
+    """텔레그램 메시지 전송 (재시도 로직 포함)"""
     url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
     payload = {
         "chat_id": CHAT_ID,
         "text": text,
         "parse_mode": "HTML",
-        "disable_web_page_preview": False 
+        "disable_web_page_preview": False
     }
-    try:
-        res = requests.post(url, json=payload, timeout=15, verify=False)
-        res.raise_for_status()
-        return res.json()
-    except Exception as e:
-        print(f"❌ 텔레그램 전송 중 에러: {e}")
-        return None
+    
+    for i in range(3): # 최대 3번 재시도
+        try:
+            res = requests.post(url, json=payload, timeout=20, verify=False)
+            res.raise_for_status()
+            return res.json()
+        except Exception as e:
+            print(f"⚠️ 재시도 {i+1}: {e}")
+            time.sleep(5)
+    return None
 
 def get_ticket_data():
+    """구글 뉴스 RSS 데이터 수집 및 링크 정리"""
     queries = [
         ("📣 <b>[인터파크 공지]</b>", '인터파크 "티켓 오픈 공지"'),
         ("📰 <b>[티켓 뉴스]</b>", "공연 티켓 오픈 콘서트 뮤지컬"),
@@ -41,6 +47,7 @@ def get_ticket_data():
     seen = set()
 
     for label, q in queries:
+        # when:1d로 최근 24시간 필터링
         q_encoded = quote(f"{q} when:1d")
         url = f"https://news.google.com/rss/search?q={q_encoded}&hl=ko&gl=KR&ceid=KR:ko"
 
@@ -53,6 +60,8 @@ def get_ticket_data():
             count = 0
             for item in items:
                 title = item.title.text if item.title else "제목 없음"
+                
+                # 링크 추출
                 link_tag = item.find('link')
                 raw_link = ""
                 if link_tag:
@@ -64,10 +73,10 @@ def get_ticket_data():
                 short_title = clean_title[:15].replace(" ", "")
 
                 if short_title not in seen:
-                    # [핵심 수정] 링크를 "🔗 원문 보기"라는 문구에 숨김
-                    # 주소에 포함된 특수문자로 인해 HTML 태그가 깨지지 않도록 처리
-                    safe_link = raw_link.replace('"', '%22').replace("'", "%27")
-                    event_msg = f"{label}\n<b>{clean_title}</b>\n<a href='{safe_link}'>🔗 원문 보기</a>"
+                    # [링크 최적화] 복잡한 URL은 '🔗 자세히 보기' 뒤에 숨김
+                    # 따옴표 에러 방지를 위해 간단한 처리 추가
+                    safe_link = raw_link.replace('"', '').replace("'", "")
+                    event_msg = f"{label}\n<b>{clean_title}</b>\n<a href='{safe_link}'>🔗 자세히 보기</a>"
                     
                     all_events.append(event_msg)
                     seen.add(short_title)
@@ -92,7 +101,8 @@ if __name__ == "__main__":
         if len(final_msg) > 4000:
             final_msg = final_msg[:3900] + "\n\n...(이하 생략)"
 
-        send_telegram_message(final_msg)
-        print(f"✅ 총 {len(data)}건 전송 완료!")
+        success = send_telegram_message(final_msg)
+        if success:
+            print(f"✅ 총 {len(data)}건 전송 성공!")
     else:
-        print("✅ 최근 24시간 내 소식이 없습니다.")
+        print("✅ 최근 24시간 내 새로운 소식이 없습니다.")
