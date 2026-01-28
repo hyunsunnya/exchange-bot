@@ -5,11 +5,15 @@ from bs4 import BeautifulSoup
 from urllib.parse import quote
 from datetime import datetime
 
+# SSL 경고 및 일반 경고 무시
 warnings.filterwarnings("ignore")
+import urllib3
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# GitHub Secrets 로드
-TOKEN = os.environ.get("TELEGRAM_TOKEN")
-CHAT_ID = os.environ.get("CHAT_ID")
+# 1. GitHub Secrets 로드
+TOKEN = "7874043423:AAEtpCMnZpG9lOzMHfwd1LxumLiAB-_oNAw"
+CHAT_ID = "-1003615231060"
+
 
 def send_telegram_message(text: str):
     url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
@@ -17,10 +21,11 @@ def send_telegram_message(text: str):
         "chat_id": CHAT_ID,
         "text": text,
         "parse_mode": "HTML",
-        "disable_web_page_preview": False # 링크 미리보기를 켜는 것이 신뢰도 확인에 좋습니다.
+        "disable_web_page_preview": False
     }
     try:
-        res = requests.post(url, json=payload, timeout=10)
+        # 메시지 전송 시에도 verify=False 적용 (필요 시)
+        res = requests.post(url, json=payload, timeout=15, verify=False)
         res.raise_for_status()
         return res.json()
     except Exception as e:
@@ -28,48 +33,50 @@ def send_telegram_message(text: str):
         return None
 
 def get_ticket_data():
-    # tbs=qdr:d -> 최근 24시간 이내의 결과만 노출
-    # tbs=qdr:h -> 최근 1시간 이내 (더 극단적인 최신성을 원할 경우)
     queries = [
         ("📣 <b>[인터파크 공지]</b>", '인터파크 "티켓 오픈 공지"'),
         ("📰 <b>[티켓 뉴스]</b>", "공연 티켓 오픈 콘서트 뮤지컬"),
     ]
 
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36"
     }
     all_events = []
     seen = set()
 
     for label, q in queries:
-        q_encoded = quote(q)
-        # &tbs=qdr:d 파라미터를 추가하여 24시간 이내 자료만 수집
-        url = f"https://news.google.com/rss/search?q={q_encoded}+when:24h&hl=ko&gl=KR&ceid=KR:ko"
+        q_encoded = quote(f"{q} when:1d")
+        url = f"https://news.google.com/rss/search?q={q_encoded}&hl=ko&gl=KR&ceid=KR:ko"
 
         try:
-            res = requests.get(url, headers=headers, timeout=10)
+            # [핵심 수정] verify=False 추가하여 SSL 인증서 검증 건너뜀
+            res = requests.get(url, headers=headers, timeout=15, verify=False)
             res.raise_for_status()
 
-            # RSS는 xml 형식이므로 'xml' 파서가 좋지만, 기본 환경을 위해 'html.parser' 유지
+            # 파서 호환성을 위해 html.parser 사용
             soup = BeautifulSoup(res.content, "html.parser")
             items = soup.find_all('item')
 
             count = 0
             for item in items:
                 title = item.title.text if item.title else "제목 없음"
-                # RSS 링크 추출 방식 개선 (가장 안전한 방식)
-                link = item.link.text if item.link else ""
                 
-                # 중복 제거 및 클리닝
+                # 링크 추출 로직 강화
+                link_tag = item.find('link')
+                link = ""
+                if link_tag:
+                    link = link_tag.text.strip() if link_tag.text else link_tag.next_sibling.strip()
+                
+                if not link:
+                    continue
+
                 clean_title = title.split(' - ')[0]
-                short_title = clean_title[:12].replace(" ", "")
+                short_title = clean_title[:15].replace(" ", "")
 
                 if short_title not in seen:
-                    # 게시글 시간 정보 가져오기 (선택 사항)
-                    pub_date = item.pubdate.text if item.pubdate else ""
-                    
-                    msg = f"{label}\n{clean_title}\n<a href='{link}'>🔗 자세히 보기</a>"
-                    all_events.append(msg)
+                    # 링크가 활성화되도록 단순 텍스트로 노출
+                    event_msg = f"{label}\n<b>{clean_title}</b>\n🔗 {link}"
+                    all_events.append(event_msg)
                     seen.add(short_title)
                     count += 1
                 
@@ -84,15 +91,18 @@ if __name__ == "__main__":
     if not TOKEN or not CHAT_ID:
         print("❌ 설정 에러: GitHub Secrets를 확인하세요.")
     else:
-        print(f"🚀 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} 수집 시작...")
+        print(f"🚀 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} 데이터 수집 시작...")
         data = get_ticket_data()
         
         if data:
-            final_msg = f"<b>📅 {datetime.now().strftime('%m/%d')} 티켓 오픈 소식</b>\n"
-            final_msg += "━━━━━━━━━━━━━━━\n\n"
-            final_msg += "\n\n".join(data)
+            header = f"<b>📅 {datetime.now().strftime('%m월 %d일')} 티켓 소식</b>\n"
+            header += "━━━━━━━━━━━━━━━━━━\n\n"
+            final_msg = header + "\n\n".join(data)
             
+            if len(final_msg) > 4000:
+                final_msg = final_msg[:3900] + "\n\n...(이하 생략)"
+
             send_telegram_message(final_msg)
-            print(f"✅ 총 {len(data)}건 전송 성공!")
+            print(f"✅ 총 {len(data)}건 전송 완료!")
         else:
-            print("✅ 최근 24시간 내에 새로운 소식이 없습니다.")
+            print("✅ 최근 24시간 내 소식이 없습니다.")
