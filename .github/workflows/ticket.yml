@@ -3,11 +3,11 @@ name: Ticket & ETF Notification Bot
 on:
   workflow_dispatch:  # 수동 실행 시 모든 스크립트 작동
   schedule:
-    - cron: '0 2 * * *'   # 한국 시간 오전 11:00 (티켓 알림용, UTC 02:00)
-    - cron: '0 4 * * *'   # 한국 시간 오후 1:00 (ETF 알림용, UTC 04:00)
+    - cron: '0 2 * * *'   # 한국 시간 오전 11:00 (티켓 알림)
+    - cron: '0 4 * * *'   # 한국 시간 오후 1:00 (ETF 알림)
 
 jobs:
-  ticket_job:
+  job_run:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -23,27 +23,24 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install requests beautifulsoup4 python-telegram-bot yfinance pandas
 
-      - name: Install and Run Scripts
+      # 1. 티켓 알림 실행 (오전 11시 스케줄 또는 수동 실행 시)
+      - name: Run Ticket Script
+        if: github.event.schedule == '0 2 * * *' || github.event_name == 'workflow_dispatch'
         env:
           KMA_API_KEY: ${{ secrets.KMA_API_KEY }}
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
-        run: |
-          # 현재 시간(UTC)의 '시(Hour)' 정보 추출
-          HOUR=$(date +%H)
-          echo "현재 UTC 시간: $HOUR 시"
+        run: python ticket_gh.py || echo "ticket_gh.py failed"
 
-          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
-            echo "🚀 [수동 실행] 모든 스크립트를 순차적으로 가동합니다."
-            python test.py || echo "⚠️ test.py 실행 실패"
-            python etf_tracker.py || echo "⚠️ etf_tracker.py 실행 실패"
-            python ticket_gh.py || echo "⚠️ ticket_gh.py 실행 실패"
-            
-          elif [ "$HOUR" == "02" ]; then
-            echo "🎫 [오전 11시] 티켓 공지 수집을 시작합니다."
-            python ticket_gh.py
-            
-          elif [ "$HOUR" == "04" ]; then
-            echo "📊 [오후 1시] ETF 시세 트래킹을 시작합니다."
-            python etf_tracker.py
-          fi
+      # 2. ETF 시세 알림 실행 (오후 1시 스케줄 또는 수동 실행 시)
+      - name: Run ETF Tracker
+        if: github.event.schedule == '0 4 * * *' || github.event_name == 'workflow_dispatch'
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
+        run: python etf_tracker.py || echo "etf_tracker.py failed"
+
+      # 3. 테스트 스크립트 (수동 실행 시에만 확인용으로 가동)
+      - name: Run Test Script
+        if: github.event_name == 'workflow_dispatch'
+        run: python test.py || echo "test.py failed"
