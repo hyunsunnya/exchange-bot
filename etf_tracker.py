@@ -1,5 +1,8 @@
 import requests
+from bs4 import BeautifulSoup
 import warnings
+import json
+import re
 from datetime import datetime
 
 # SSL 경고 무시
@@ -19,53 +22,57 @@ ETF_TARGETS = {
     "TIGER 미국S&P500": "360750"
 }
 
-def get_etf_data(code):
-    """네이버 시세 API를 직접 호출하여 데이터 획득 (가장 확실한 방법)"""
-    # 네이버에서 실시간 시세를 가져오는 API 주소
-    url = f"https://polling.finance.naver.com/api/realtime?query=SERVICE_ITEM:{code}"
+def get_naver_etf_price(code):
+    """네이버 금융 페이지 내 임베딩된 JSON 데이터를 직접 파싱"""
+    url = f"https://finance.naver.com/item/main.naver?code={code}"
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     }
     
-    res = requests.get(url, headers=headers, verify=False, timeout=15)
-    res_data = res.json()
+    res = requests.get(url, headers=headers, verify=False, timeout=20)
+    soup = BeautifulSoup(res.text, 'html.parser')
     
-    # API 응답에서 필요한 데이터 추출
-    item = res_data['result']['areas'][0]['datas'][0]
-    
-    curr_price = int(item['nv'].replace(",", ""))  # 현재가 (now value)
-    diff_price = int(item['cv'].replace(",", ""))  # 전일비 (compare value)
-    
-    # 등락 구분 (2: 상승, 5: 하락, 3: 보합)
-    rf = item['rf']
-    if rf == "5":
-        diff_price = -diff_price
-    elif rf == "3":
-        diff_price = 0
-        
-    prev_price = curr_price - diff_price
-    change_pct = (diff_price / prev_price * 100) if prev_price != 0 else 0
-    
-    return curr_price, diff_price, change_pct
-
-def send_telegram_message(text: str):
-    url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
-    payload = {"chat_id": CHAT_ID, "text": text, "parse_mode": "HTML"}
+    # 1. HTML 태그 방식 (우선 시도)
     try:
-        res = requests.post(url, json=payload, timeout=30, verify=False)
-        return res.json()
+        price_area = soup.select_one(".today")
+        if price_area:
+            curr_price = int(price_area.select_one(".no_today .blind").text.replace(",", ""))
+            diff_area = price_area.select_one(".no_exday")
+            diff_price = int(diff_area.select_one(".blind").text.replace(",", ""))
+            
+            # 상승/하락 여부 판단
+            if "ico_down" in str(diff_area) or "하락" in str(diff_area):
+                diff_price = -diff_price
+            
+            prev_price = curr_price - diff_price
+            pct = (diff_price / prev_price * 100) if prev_price != 0 else 0
+            return curr_price, diff_price, pct
+    except:
+        pass
+
+    # 2. 스크립트 정규식 방식 (태그 방식 실패 시 대안)
+    # 네이버 금융 페이지 내 'now_value' 등의 키워드가 포함된 스크립트 영역을 찾습니다.
+    try:
+        script_data = re.search(r"var\s+itemCurrentPrice\s+=\s+(\{.*?\});", res.text, re.S)
+        if not script_data:
+            # 다른 패턴 시도
+            curr_price = int(re.search(r'now_value">([\d,]+)', res.text).group(1).replace(",", ""))
+            diff_price = int(re.search(r'area_delta">.*?blind">([\d,]+)', res.text, re.S).group(1).replace(",", ""))
+            if "🔻" in res.text or "하락" in res.text:
+                diff_price = -diff_price
+            prev_price = curr_price - diff_price
+            pct = (diff_price / prev_price * 100)
+            return curr_price, diff_price, pct
     except Exception as e:
-        print(f"❌ 전송 실패: {e}")
-    return None
+        raise ValueError(f"데이터 추출 실패: {e}")
 
 def get_etf_report():
     lines = [f"<b>📊 {datetime.now().strftime('%m월 %d일')} ETF 시세 리포트</b>", "━━━━━━━━━━━━━━━━━━"]
 
     for name, code in ETF_TARGETS.items():
         try:
-            curr, diff, pct = get_etf_data(code)
+            curr, diff, pct = get_naver_etf_price(code)
             mark = "🔺" if diff > 0 else "🔹" if diff < 0 else "⚪"
-            # 절대값 abs(diff)를 사용하여 기호와 숫자가 겹치지 않게 처리
             lines.append(f"<b>• {name}</b>\n  {curr:,.0f}원 ({mark} {abs(diff):,.0f}, {pct:+.2f}%)")
             print(f"✅ {name} 완료")
         except Exception as e:
@@ -75,8 +82,15 @@ def get_etf_report():
     return "\n\n".join(lines)
 
 if __name__ == "__main__":
-    print(f"🚀 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ETF 시세 수집 시작 (API)...")
+    print(f"🚀 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ETF 시세 수집 시작...")
     report = get_etf_report()
-    if report:
-        send_telegram_message(report)
+    
+    # 텔레그램 전송
+    url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
+    payload = {"chat_id": CHAT_ID, "text": report, "parse_mode": "HTML"}
+    res = requests.post(url, json=payload, timeout=30, verify=False)
+    
+    if res.status_code == 200:
         print("✅ 리포트 전송 성공!")
+    else:
+        print(f"❌ 전송 실패: {res.text}")
